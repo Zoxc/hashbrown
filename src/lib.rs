@@ -32,6 +32,7 @@
     clippy::redundant_else,
     clippy::manual_map
 )]
+#![feature(option_result_unwrap_unchecked)]
 #![warn(missing_docs)]
 #![warn(rust_2018_idioms)]
 

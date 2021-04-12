@@ -914,6 +914,74 @@ impl<T, A: Allocator + Clone> RawTable<T, A> {
 
     /// Searches for an element in the table.
     #[inline]
+    unsafe fn search<R>(
+        &self,
+        hash: u64,
+        mut eq: impl FnMut(&T) -> bool,
+        mut stop: impl FnMut(&Group, &ProbeSeq) -> Option<R>,
+    ) -> Result<Bucket<T>, R> {
+        let h2_hash = h2(hash);
+        let mut probe_seq = self.table.probe_seq(hash);
+        let mut group = Group::load(self.table.ctrl(probe_seq.pos));
+        let mut bitmask = group.match_byte(h2_hash).into_iter();
+
+        loop {
+            if let Some(bit) = bitmask.next() {
+                let index = (probe_seq.pos + bit) & self.table.bucket_mask;
+
+                let bucket = self.bucket(index);
+                let elm = self.bucket(index).as_ref();
+                if likely(eq(elm)) {
+                    return Ok(bucket);
+                }
+
+                // Look at the next bit
+                continue;
+            }
+
+            if let Some(stop) = stop(&group, &probe_seq) {
+                return Err(stop);
+            }
+
+            probe_seq.move_next(self.table.bucket_mask);
+            group = Group::load(self.table.ctrl(probe_seq.pos));
+            bitmask = group.match_byte(h2_hash).into_iter();
+        }
+    }
+
+    /// Searches for an element in the table.
+    #[inline]
+    pub(crate) fn find_potential(
+        &self,
+        hash: u64,
+        eq: impl FnMut(&T) -> bool,
+    ) -> Result<Bucket<T>, usize> {
+        unsafe {
+            self.search(hash, eq, |group, probe_seq| {
+                let bit = group.match_empty().lowest_set_bit();
+                if likely(bit.is_some()) {
+                    let index = (probe_seq.pos + bit.unwrap_unchecked()) & self.info().bucket_mask;
+                    return Some(index);
+                } else {
+                    None
+                }
+            })
+        }
+    }
+
+    /// Searches for an element in the table.
+    #[inline]
+    pub(crate) fn insert_potential(&mut self, hash: u64, value: T, index: usize) {
+        unsafe {
+            let old_ctrl = *self.table.ctrl(index);
+            self.table.record_item_insert_at(index, old_ctrl, hash);
+            let bucket = self.table.bucket(index);
+            bucket.write(value);
+        }
+    }
+
+    /// Searches for an element in the table.
+    #[inline]
     pub fn find(&self, hash: u64, mut eq: impl FnMut(&T) -> bool) -> Option<Bucket<T>> {
         unsafe {
             for bucket in self.iter_hash(hash) {
