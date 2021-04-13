@@ -898,20 +898,21 @@ where
     /// ```
     #[cfg_attr(feature = "inline-more", inline)]
     pub fn entry(&mut self, key: K) -> Entry<'_, K, V, S, A> {
+        self.reserve(1);
         let hash = make_insert_hash::<K, S>(&self.hash_builder, &key);
-        if let Some(elem) = self.table.find(hash, equivalent_key(&key)) {
-            Entry::Occupied(OccupiedEntry {
+        match self.table.find_potential(hash, equivalent_key(&key)) {
+            Ok(elem) => Entry::Occupied(OccupiedEntry {
                 hash,
                 key: Some(key),
                 elem,
                 table: self,
-            })
-        } else {
-            Entry::Vacant(VacantEntry {
+            }),
+            Err(index) => Entry::Vacant(VacantEntry {
                 hash,
                 key,
+                index,
                 table: self,
-            })
+            }),
         }
     }
 
@@ -1263,7 +1264,7 @@ where
         self.table
             .reserve(1, make_hasher::<K, _, V, S>(&self.hash_builder));
         match self.table.find_potential(hash, equivalent_key(&k)) {
-            Ok(bucket) => Some(mem::replace(bucket.as_mut(), v)),
+            Ok(bucket) => Some(mem::replace(&mut unsafe { bucket.as_mut() }.1, v)),
             Err(index) => {
                 self.table.insert_potential(hash, (k, v), index);
                 None
@@ -2406,6 +2407,7 @@ impl<K: Debug, V: Debug, S, A: Allocator + Clone> Debug for OccupiedEntry<'_, K,
 pub struct VacantEntry<'a, K, V, S, A: Allocator + Clone = Global> {
     hash: u64,
     key: K,
+    index: usize,
     table: &'a mut HashMap<K, V, S, A>,
 }
 
@@ -3268,6 +3270,7 @@ impl<'a, K, V, S, A: Allocator + Clone> OccupiedEntry<'a, K, V, S, A> {
                 Entry::Vacant(VacantEntry {
                     hash: self.hash,
                     key,
+                    index: self.table.table.table.find_insert_slot(self.hash),
                     table: self.table,
                 })
             } else {
@@ -3336,12 +3339,12 @@ impl<'a, K, V, S, A: Allocator + Clone> VacantEntry<'a, K, V, S, A> {
         S: BuildHasher,
     {
         let table = &mut self.table.table;
-        let entry = table.insert_entry(
-            self.hash,
-            (self.key, value),
-            make_hasher::<K, _, V, S>(&self.table.hash_builder),
-        );
-        &mut entry.1
+        unsafe {
+            &mut table
+                .insert_potential(self.hash, (self.key, value), self.index)
+                .as_mut()
+                .1
+        }
     }
 
     #[cfg_attr(feature = "inline-more", inline)]
@@ -3350,11 +3353,10 @@ impl<'a, K, V, S, A: Allocator + Clone> VacantEntry<'a, K, V, S, A> {
         K: Hash,
         S: BuildHasher,
     {
-        let elem = self.table.table.insert(
-            self.hash,
-            (self.key, value),
-            make_hasher::<K, _, V, S>(&self.table.hash_builder),
-        );
+        let elem = self
+            .table
+            .table
+            .insert_potential(self.hash, (self.key, value), self.index);
         OccupiedEntry {
             hash: self.hash,
             key: None,

@@ -367,14 +367,14 @@ impl<T> Bucket<T> {
 
 /// A raw hash table with an unsafe API.
 pub struct RawTable<T, A: Allocator + Clone = Global> {
-    table: RawTableInner<A>,
+    pub(crate) table: RawTableInner<A>,
     // Tell dropck that we own instances of T.
     marker: PhantomData<T>,
 }
 
 /// Non-generic part of `RawTable` which allows functions to be instantiated only once regardless
 /// of how many different key-value types are used.
-struct RawTableInner<A> {
+pub(crate) struct RawTableInner<A> {
     // Mask to get an index from a hash value. The value is one less than the
     // number of buckets in the table.
     bucket_mask: usize,
@@ -958,9 +958,29 @@ impl<T, A: Allocator + Clone> RawTable<T, A> {
     ) -> Result<Bucket<T>, usize> {
         unsafe {
             self.search(hash, eq, |group, probe_seq| {
-                let bit = group.match_empty().lowest_set_bit();
+                let bit = group.match_empty_or_deleted().lowest_set_bit();
                 if likely(bit.is_some()) {
-                    let index = (probe_seq.pos + bit.unwrap_unchecked()) & self.info().bucket_mask;
+                    let index = (probe_seq.pos + bit.unwrap_unchecked()) & self.table.bucket_mask;
+
+                    // In tables smaller than the group width, trailing control
+                    // bytes outside the range of the table are filled with
+                    // EMPTY entries. These will unfortunately trigger a
+                    // match, but once masked may point to a full bucket that
+                    // is already occupied. We detect this situation here and
+                    // perform a second scan starting at the begining of the
+                    // table. This second scan is guaranteed to find an empty
+                    // slot (due to the load factor) before hitting the trailing
+                    // control bytes (containing EMPTY).
+                    if unlikely(is_full(*self.table.ctrl(index))) {
+                        debug_assert!(self.table.bucket_mask < Group::WIDTH);
+                        debug_assert_ne!(probe_seq.pos, 0);
+                        return Some(
+                            Group::load_aligned(self.table.ctrl(0))
+                                .match_empty_or_deleted()
+                                .lowest_set_bit_nonzero(),
+                        );
+                    }
+
                     return Some(index);
                 } else {
                     None
@@ -971,12 +991,13 @@ impl<T, A: Allocator + Clone> RawTable<T, A> {
 
     /// Searches for an element in the table.
     #[inline]
-    pub(crate) fn insert_potential(&mut self, hash: u64, value: T, index: usize) {
+    pub(crate) fn insert_potential(&mut self, hash: u64, value: T, index: usize) -> Bucket<T> {
         unsafe {
             let old_ctrl = *self.table.ctrl(index);
             self.table.record_item_insert_at(index, old_ctrl, hash);
             let bucket = self.table.bucket(index);
             bucket.write(value);
+            bucket
         }
     }
 
@@ -1274,7 +1295,7 @@ impl<A: Allocator + Clone> RawTableInner<A> {
     ///
     /// There must be at least 1 empty bucket in the table.
     #[inline]
-    fn find_insert_slot(&self, hash: u64) -> usize {
+    pub(crate) fn find_insert_slot(&self, hash: u64) -> usize {
         let mut probe_seq = self.probe_seq(hash);
         loop {
             unsafe {
