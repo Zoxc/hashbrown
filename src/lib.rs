@@ -9,7 +9,7 @@
 //! [here]: https://github.com/abseil/abseil-cpp/blob/master/absl/container/internal/raw_hash_set.h
 //! [CppCon talk]: https://www.youtube.com/watch?v=ncHmEUmJZf4
 
-#![no_std]
+//#![no_std]
 #![cfg_attr(
     feature = "nightly",
     feature(
@@ -159,4 +159,9 @@ fn test_bumpalo() {
     let bump = Bump::new();
     let mut map = HashMap::new_in(BumpWrapper(&bump));
     map.insert(0, 1);
+}
+
+#[no_mangle]
+fn insert_test(a: &mut HashMap<u64, u64>, hash: u64) {
+    a.insert2(1, 2, hash);
 }

@@ -11,6 +11,9 @@ categories = ["data-structures", "no-std"]
 exclude = [".travis.yml", "bors.toml", "/ci/*"]
 edition = "2018"
 
+[lib]
+crate-type = ["dylib"]
+
 [dependencies]
 # For the default hasher
 ahash = { version = "0.7.0", default-features = false, optional = true }
@@ -57,3 +60,6 @@ inline-more = []
 
 [package.metadata.docs.rs]
 features = ["nightly", "rayon", "serde", "raw"]
+
+[profile.release]
+debug = 0
