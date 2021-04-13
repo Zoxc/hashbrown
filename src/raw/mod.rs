@@ -959,8 +959,10 @@ impl<T, A: Allocator + Clone> RawTable<T, A> {
         unsafe {
             self.search(hash, eq, |group, probe_seq| {
                 let bit = group.match_empty_or_deleted().lowest_set_bit();
+
                 if likely(bit.is_some()) {
-                    let index = (probe_seq.pos + bit.unwrap_unchecked()) & self.table.bucket_mask;
+                    let mut index =
+                        (probe_seq.pos + bit.unwrap_unchecked()) & self.table.bucket_mask;
 
                     // In tables smaller than the group width, trailing control
                     // bytes outside the range of the table are filled with
@@ -974,14 +976,19 @@ impl<T, A: Allocator + Clone> RawTable<T, A> {
                     if unlikely(is_full(*self.table.ctrl(index))) {
                         debug_assert!(self.table.bucket_mask < Group::WIDTH);
                         debug_assert_ne!(probe_seq.pos, 0);
-                        return Some(
-                            Group::load_aligned(self.table.ctrl(0))
-                                .match_empty_or_deleted()
-                                .lowest_set_bit_nonzero(),
-                        );
+
+                        index = Group::load_aligned(self.table.ctrl(0))
+                            .match_empty_or_deleted()
+                            .lowest_set_bit_nonzero()
                     }
 
-                    return Some(index);
+                    // Only stop the search if the group is empty. The element might be
+                    // in a following group.
+                    if likely(group.match_empty().any_bit_set()) {
+                        return Some(index);
+                    } else {
+                        None
+                    }
                 } else {
                     None
                 }
