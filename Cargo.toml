@@ -12,7 +12,7 @@ exclude = [".travis.yml", "bors.toml", "/ci/*"]
 edition = "2018"
 
 [lib]
-crate-type = ["dylib"]
+#crate-type = ["dylib"]
 
 [dependencies]
 # For the default hasher

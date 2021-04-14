@@ -957,6 +957,7 @@ impl<T, A: Allocator + Clone> RawTable<T, A> {
         eq: impl FnMut(&T) -> bool,
     ) -> Result<Bucket<T>, usize> {
         unsafe {
+            let mut tombstone = None;
             self.search(hash, eq, |group, probe_seq| {
                 let bit = group.match_empty_or_deleted().lowest_set_bit();
 
@@ -985,8 +986,16 @@ impl<T, A: Allocator + Clone> RawTable<T, A> {
                     // Only stop the search if the group is empty. The element might be
                     // in a following group.
                     if likely(group.match_empty().any_bit_set()) {
-                        return Some(index);
+                        // Use a tombstone if we found one
+                        if unlikely(tombstone.is_some()) {
+                            tombstone
+                        } else {
+                            Some(index)
+                        }
                     } else {
+                        // We found a tombstone, record it so we can return it as a potential
+                        // insertion location.
+                        tombstone = Some(index);
                         None
                     }
                 } else {
