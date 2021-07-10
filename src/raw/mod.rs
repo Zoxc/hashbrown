@@ -647,7 +647,7 @@ impl<T, A: Allocator + Clone> RawTable<T, A> {
     /// without reallocation.
     #[cfg_attr(feature = "inline-more", inline)]
     pub fn reserve(&mut self, additional: usize, hasher: impl Fn(&T) -> u64) {
-        if additional > self.table.growth_left {
+        if unlikely(additional > self.table.growth_left) {
             // Avoid `Result::unwrap_or_else` because it bloats LLVM IR.
             if self
                 .reserve_rehash(additional, hasher, Fallibility::Infallible)
