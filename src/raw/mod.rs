@@ -816,92 +816,25 @@ impl<T, A: Allocator + Clone> RawTable<T, A> {
         }
     }
 
-    /// Searches for an element in the table, stopping at the group where `stop` returns `Some` and
-    /// no elements matched. Returns the bucket that matches or the result of `stop`.
-    #[inline]
-    unsafe fn search<R>(
-        &self,
-        hash: u64,
-        mut eq: impl FnMut(&T) -> bool,
-        mut stop: impl FnMut(&Group, &ProbeSeq) -> Option<R>,
-    ) -> Result<Bucket<T>, R> {
-        let h2_hash = h2(hash);
-        let mut probe_seq = self.table.probe_seq(hash);
-
-        loop {
-            let group = Group::load(self.table.ctrl(probe_seq.pos));
-
-            for bit in group.match_byte(h2_hash).into_iter() {
-                let index = (probe_seq.pos + bit) & self.table.bucket_mask;
-
-                let bucket = self.bucket(index);
-                let elm = self.bucket(index).as_ref();
-                if likely(eq(elm)) {
-                    return Ok(bucket);
-                }
-            }
-
-            if let Some(stop) = stop(&group, &probe_seq) {
-                return Err(stop);
-            }
-
-            probe_seq.move_next(self.table.bucket_mask);
-        }
-    }
-
     /// Searches for an element in the table,
     /// or a potential slot where that element could be inserted.
     #[inline]
     pub fn find_potential(
         &self,
         hash: u64,
-        eq: impl FnMut(&T) -> bool,
+        mut eq: impl FnMut(&T) -> bool,
     ) -> Result<Bucket<T>, usize> {
         unsafe {
-            let mut tombstone = None;
-            self.search(hash, eq, |group, probe_seq| {
-                let bit = group.match_empty_or_deleted().lowest_set_bit();
+            let result = self.table.find_potential_inner(hash, &mut |index| {
+                let bucket = self.bucket(index);
+                let elm = bucket.as_ref();
+                eq(elm)
+            });
 
-                if likely(bit.is_some()) {
-                    let mut index = (probe_seq.pos + bit.unwrap()) & self.table.bucket_mask;
-
-                    // In tables smaller than the group width, trailing control
-                    // bytes outside the range of the table are filled with
-                    // EMPTY entries. These will unfortunately trigger a
-                    // match, but once masked may point to a full bucket that
-                    // is already occupied. We detect this situation here and
-                    // perform a second scan starting at the begining of the
-                    // table. This second scan is guaranteed to find an empty
-                    // slot (due to the load factor) before hitting the trailing
-                    // control bytes (containing EMPTY).
-                    if unlikely(is_full(*self.table.ctrl(index))) {
-                        debug_assert!(self.table.bucket_mask < Group::WIDTH);
-                        debug_assert_ne!(probe_seq.pos, 0);
-
-                        index = Group::load_aligned(self.table.ctrl(0))
-                            .match_empty_or_deleted()
-                            .lowest_set_bit_nonzero()
-                    }
-
-                    // Only stop the search if the group is empty. The element might be
-                    // in a following group.
-                    if likely(group.match_empty().any_bit_set()) {
-                        // Use a tombstone if we found one
-                        if unlikely(tombstone.is_some()) {
-                            tombstone
-                        } else {
-                            Some(index)
-                        }
-                    } else {
-                        // We found a tombstone, record it so we can return it as a potential
-                        // insertion location.
-                        tombstone = Some(index);
-                        None
-                    }
-                } else {
-                    None
-                }
-            })
+            match result {
+                Ok(index) => Ok(self.bucket(index)),
+                Err(index) => Err(index),
+            }
         }
     }
 
@@ -1216,6 +1149,93 @@ impl<A: Allocator + Clone> RawTableInner<A> {
 
                 Ok(result)
             }
+        }
+    }
+
+    /// Searches for an element in the table, stopping at the group where `stop` returns `Some` and
+    /// no elements matched. Returns the bucket that matches or the result of `stop`.
+    #[inline]
+    unsafe fn search<R>(
+        &self,
+        hash: u64,
+        eq: &mut dyn FnMut(usize) -> bool,
+        mut stop: impl FnMut(&Group, &ProbeSeq) -> Option<R>,
+    ) -> Result<usize, R> {
+        let h2_hash = h2(hash);
+        let mut probe_seq = self.probe_seq(hash);
+
+        loop {
+            let group = Group::load(self.ctrl(probe_seq.pos));
+
+            for bit in group.match_byte(h2_hash).into_iter() {
+                let index = (probe_seq.pos + bit) & self.bucket_mask;
+
+                if likely(eq(index)) {
+                    return Ok(index);
+                }
+            }
+
+            if let Some(stop) = stop(&group, &probe_seq) {
+                return Err(stop);
+            }
+
+            probe_seq.move_next(self.bucket_mask);
+        }
+    }
+
+    /// Searches for an element in the table,
+    /// or a potential slot where that element could be inserted.
+    #[inline]
+    pub fn find_potential_inner(
+        &self,
+        hash: u64,
+        eq: &mut dyn FnMut(usize) -> bool,
+    ) -> Result<usize, usize> {
+        unsafe {
+            let mut tombstone = None;
+            self.search(hash, eq, |group, probe_seq| {
+                let bit = group.match_empty_or_deleted().lowest_set_bit();
+
+                if likely(bit.is_some()) {
+                    let mut index = (probe_seq.pos + bit.unwrap()) & self.bucket_mask;
+
+                    // In tables smaller than the group width, trailing control
+                    // bytes outside the range of the table are filled with
+                    // EMPTY entries. These will unfortunately trigger a
+                    // match, but once masked may point to a full bucket that
+                    // is already occupied. We detect this situation here and
+                    // perform a second scan starting at the begining of the
+                    // table. This second scan is guaranteed to find an empty
+                    // slot (due to the load factor) before hitting the trailing
+                    // control bytes (containing EMPTY).
+                    if unlikely(is_full(*self.ctrl(index))) {
+                        debug_assert!(self.bucket_mask < Group::WIDTH);
+                        debug_assert_ne!(probe_seq.pos, 0);
+
+                        index = Group::load_aligned(self.ctrl(0))
+                            .match_empty_or_deleted()
+                            .lowest_set_bit_nonzero()
+                    }
+
+                    // Only stop the search if the group is empty. The element might be
+                    // in a following group.
+                    if likely(group.match_empty().any_bit_set()) {
+                        // Use a tombstone if we found one
+                        if unlikely(tombstone.is_some()) {
+                            tombstone
+                        } else {
+                            Some(index)
+                        }
+                    } else {
+                        // We found a tombstone, record it so we can return it as a potential
+                        // insertion location.
+                        tombstone = Some(index);
+                        None
+                    }
+                } else {
+                    None
+                }
+            })
         }
     }
 
