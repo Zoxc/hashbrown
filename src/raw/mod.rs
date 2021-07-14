@@ -819,23 +819,10 @@ impl<T, A: Allocator + Clone> RawTable<T, A> {
     /// Searches for an element in the table,
     /// or a potential slot where that element could be inserted.
     #[inline]
-    pub fn find_potential(
-        &self,
-        hash: u64,
-        mut eq: impl FnMut(&T) -> bool,
-    ) -> Result<Bucket<T>, usize> {
-        unsafe {
-            let result = self.table.find_potential_inner(hash, &mut |index| {
-                let bucket = self.bucket(index);
-                let elm = bucket.as_ref();
-                eq(elm)
-            });
-
-            match result {
-                Ok(index) => Ok(self.bucket(index)),
-                Err(index) => Err(index),
-            }
-        }
+    pub fn find_potential(&self, hash: u64, mut eq: impl FnMut(&T) -> bool) -> (usize, bool) {
+        self.table.find_potential_inner(hash, &mut |index| unsafe {
+            eq(self.bucket(index).as_ref())
+        })
     }
 
     /// Inserts an element in the table at a potential slot as returned by `find_potential`.
@@ -1155,12 +1142,12 @@ impl<A: Allocator + Clone> RawTableInner<A> {
     /// Searches for an element in the table, stopping at the group where `stop` returns `Some` and
     /// no elements matched. Returns the bucket that matches or the result of `stop`.
     #[inline]
-    unsafe fn search<R>(
+    unsafe fn search(
         &self,
         hash: u64,
         eq: &mut dyn FnMut(usize) -> bool,
-        mut stop: impl FnMut(&Group, &ProbeSeq) -> Option<R>,
-    ) -> Result<usize, R> {
+        mut stop: impl FnMut(&Group, &ProbeSeq) -> Option<usize>,
+    ) -> (usize, bool) {
         let h2_hash = h2(hash);
         let mut probe_seq = self.probe_seq(hash);
 
@@ -1171,12 +1158,12 @@ impl<A: Allocator + Clone> RawTableInner<A> {
                 let index = (probe_seq.pos + bit) & self.bucket_mask;
 
                 if likely(eq(index)) {
-                    return Ok(index);
+                    return (index, true);
                 }
             }
 
             if let Some(stop) = stop(&group, &probe_seq) {
-                return Err(stop);
+                return (stop, false);
             }
 
             probe_seq.move_next(self.bucket_mask);
@@ -1225,7 +1212,7 @@ impl<A: Allocator + Clone> RawTableInner<A> {
         &self,
         hash: u64,
         eq: &mut dyn FnMut(usize) -> bool,
-    ) -> Result<usize, usize> {
+    ) -> (usize, bool) {
         unsafe {
             let mut tombstone = None;
             self.search(hash, eq, |group, probe_seq| {

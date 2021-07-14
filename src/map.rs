@@ -1506,12 +1506,13 @@ where
             .reserve(1, make_hasher::<K, _, V, S>(&self.hash_builder));
 
         unsafe {
-            match self.table.find_potential(hash, equivalent_key(&k)) {
-                Ok(bucket) => Some(mem::replace(&mut bucket.as_mut().1, v)),
-                Err(index) => {
-                    self.table.insert_potential(hash, (k, v), index);
-                    None
-                }
+            let (index, found) = self.table.find_potential(hash, equivalent_key(&k));
+
+            if found {
+                Some(mem::replace(&mut self.table.bucket(index).as_mut().1, v))
+            } else {
+                self.table.insert_potential(hash, (k, v), index);
+                None
             }
         }
     }
