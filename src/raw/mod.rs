@@ -853,7 +853,7 @@ impl<T, A: Allocator + Clone> RawTable<T, A> {
     /// Searches for an element in the table,
     /// or a potential slot where that element could be inserted.
     #[inline]
-    pub(crate) fn find_potential(
+    pub fn find_potential(
         &self,
         hash: u64,
         eq: impl FnMut(&T) -> bool,
@@ -908,14 +908,12 @@ impl<T, A: Allocator + Clone> RawTable<T, A> {
 
     /// Inserts an element in the table at a potential slot as returned by `find_potential`.
     #[inline]
-    pub(crate) fn insert_potential(&mut self, hash: u64, value: T, index: usize) -> Bucket<T> {
-        unsafe {
-            let old_ctrl = *self.table.ctrl(index);
-            self.table.record_item_insert_at(index, old_ctrl, hash);
-            let bucket = self.table.bucket(index);
-            bucket.write(value);
-            bucket
-        }
+    pub unsafe fn insert_potential(&mut self, hash: u64, value: T, index: usize) -> Bucket<T> {
+        let old_ctrl = *self.table.ctrl(index);
+        self.table.record_item_insert_at(index, old_ctrl, hash);
+        let bucket = self.table.bucket(index);
+        bucket.write(value);
+        bucket
     }
 
     /// Searches for an element in the table.

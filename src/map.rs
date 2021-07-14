@@ -1248,11 +1248,14 @@ where
         let hash = make_insert_hash::<K, S>(&self.hash_builder, &k);
         self.table
             .reserve(1, make_hasher::<K, _, V, S>(&self.hash_builder));
-        match self.table.find_potential(hash, equivalent_key(&k)) {
-            Ok(bucket) => Some(mem::replace(&mut unsafe { bucket.as_mut() }.1, v)),
-            Err(index) => {
-                self.table.insert_potential(hash, (k, v), index);
-                None
+
+        unsafe {
+            match self.table.find_potential(hash, equivalent_key(&k)) {
+                Ok(bucket) => Some(mem::replace(&mut bucket.as_mut().1, v)),
+                Err(index) => {
+                    self.table.insert_potential(hash, (k, v), index);
+                    None
+                }
             }
         }
     }
