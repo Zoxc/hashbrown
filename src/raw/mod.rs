@@ -828,11 +828,11 @@ impl<T, A: Allocator + Clone> RawTable<T, A> {
     ) -> Result<Bucket<T>, R> {
         let h2_hash = h2(hash);
         let mut probe_seq = self.table.probe_seq(hash);
-        let mut group = Group::load(self.table.ctrl(probe_seq.pos));
-        let mut bitmask = group.match_byte(h2_hash).into_iter();
 
         loop {
-            if let Some(bit) = bitmask.next() {
+            let group = Group::load(self.table.ctrl(probe_seq.pos));
+
+            for bit in group.match_byte(h2_hash).into_iter() {
                 let index = (probe_seq.pos + bit) & self.table.bucket_mask;
 
                 let bucket = self.bucket(index);
@@ -840,9 +840,6 @@ impl<T, A: Allocator + Clone> RawTable<T, A> {
                 if likely(eq(elm)) {
                     return Ok(bucket);
                 }
-
-                // Look at the next bit
-                continue;
             }
 
             if let Some(stop) = stop(&group, &probe_seq) {
@@ -850,8 +847,6 @@ impl<T, A: Allocator + Clone> RawTable<T, A> {
             }
 
             probe_seq.move_next(self.table.bucket_mask);
-            group = Group::load(self.table.ctrl(probe_seq.pos));
-            bitmask = group.match_byte(h2_hash).into_iter();
         }
     }
 
