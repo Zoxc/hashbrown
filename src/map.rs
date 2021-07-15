@@ -1252,10 +1252,13 @@ where
         unsafe {
             let (index, found) = self.table.find_potential(hash, equivalent_key(&k));
 
+            let bucket = self.table.bucket(index);
+
             if found {
-                Some(mem::replace(&mut self.table.bucket(index).as_mut().1, v))
+                Some(mem::replace(&mut bucket.as_mut().1, v))
             } else {
-                self.table.insert_potential(hash, (k, v), index);
+                self.table.mark_inserted(index, hash);
+                bucket.write((k, v));
                 None
             }
         }
