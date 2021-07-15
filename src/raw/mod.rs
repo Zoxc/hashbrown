@@ -1174,7 +1174,7 @@ impl<A: Allocator + Clone> RawTableInner<A> {
         loop {
             let group = unsafe { Group::load(self.ctrl(probe_seq.pos)) };
 
-            for bit in group.match_byte(h2_hash).into_iter() {
+            for bit in group.match_byte(h2_hash) {
                 let index = (probe_seq.pos + bit) & self.bucket_mask;
 
                 if likely(eq(index)) {
