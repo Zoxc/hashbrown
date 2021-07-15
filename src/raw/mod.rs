@@ -1124,11 +1124,7 @@ impl<A: Allocator + Clone> RawTableInner<A> {
 
     /// Finds the position to insert something in a group.
     #[inline]
-    unsafe fn find_insert_slot_in_group(
-        &self,
-        group: &Group,
-        probe_seq: &ProbeSeq,
-    ) -> Option<usize> {
+    fn find_insert_slot_in_group(&self, group: &Group, probe_seq: &ProbeSeq) -> Option<usize> {
         let bit = group.match_empty_or_deleted().lowest_set_bit();
 
         if likely(bit.is_some()) {
@@ -1143,12 +1139,14 @@ impl<A: Allocator + Clone> RawTableInner<A> {
             // table. This second scan is guaranteed to find an empty
             // slot (due to the load factor) before hitting the trailing
             // control bytes (containing EMPTY).
-            if unlikely(is_full(*self.ctrl(index))) {
-                debug_assert!(self.bucket_mask < Group::WIDTH);
-                debug_assert_ne!(probe_seq.pos, 0);
-                index = Group::load_aligned(self.ctrl(0))
-                    .match_empty_or_deleted()
-                    .lowest_set_bit_nonzero();
+            unsafe {
+                if unlikely(is_full(*self.ctrl(index))) {
+                    debug_assert!(self.bucket_mask < Group::WIDTH);
+                    debug_assert_ne!(probe_seq.pos, 0);
+                    index = Group::load_aligned(self.ctrl(0))
+                        .match_empty_or_deleted()
+                        .lowest_set_bit_nonzero();
+                }
             }
 
             Some(index)
@@ -1157,52 +1155,53 @@ impl<A: Allocator + Clone> RawTableInner<A> {
         }
     }
 
-    /// Searches for an element in the table,
-    /// or a potential slot where that element could be inserted.
+    /// Searches for an element in the table, or a potential slot where that element could be
+    /// inserted.
+    ///
+    /// This uses dynamic dispatch to reduce the amount of code generated, but that is
+    /// eliminated by LLVM optimizations.
     #[inline]
     pub fn find_potential_inner(
         &self,
         hash: u64,
         eq: &mut dyn FnMut(usize) -> bool,
     ) -> (usize, bool) {
-        unsafe {
-            let mut tombstone = None;
+        let mut tombstone = None;
 
-            let h2_hash = h2(hash);
-            let mut probe_seq = self.probe_seq(hash);
+        let h2_hash = h2(hash);
+        let mut probe_seq = self.probe_seq(hash);
 
-            loop {
-                let group = Group::load(self.ctrl(probe_seq.pos));
+        loop {
+            let group = unsafe { Group::load(self.ctrl(probe_seq.pos)) };
 
-                for bit in group.match_byte(h2_hash).into_iter() {
-                    let index = (probe_seq.pos + bit) & self.bucket_mask;
+            for bit in group.match_byte(h2_hash).into_iter() {
+                let index = (probe_seq.pos + bit) & self.bucket_mask;
 
-                    if likely(eq(index)) {
-                        return (index, true);
-                    }
+                if likely(eq(index)) {
+                    return (index, true);
                 }
-
-                let index = self.find_insert_slot_in_group(&group, &probe_seq);
-
-                if likely(index.is_some()) {
-                    // Only stop the search if the group is empty. The element might be
-                    // in a following group.
-                    if likely(group.match_empty().any_bit_set()) {
-                        // Use a tombstone if we found one
-                        return if unlikely(tombstone.is_some()) {
-                            (tombstone.unwrap(), false)
-                        } else {
-                            (index.unwrap(), false)
-                        };
-                    } else {
-                        // We found a tombstone, record it so we can return it as a potential
-                        // insertion location.
-                        tombstone = index;
-                    }
-                }
-
-                probe_seq.move_next(self.bucket_mask);
             }
+
+            let index = self.find_insert_slot_in_group(&group, &probe_seq);
+
+            if likely(index.is_some()) {
+                // Only stop the search if the group is empty. The element might be
+                // in a following group.
+                if likely(group.match_empty().any_bit_set()) {
+                    // Use a tombstone if we found one
+                    return if unlikely(tombstone.is_some()) {
+                        (tombstone.unwrap(), false)
+                    } else {
+                        (index.unwrap(), false)
+                    };
+                } else {
+                    // We found a tombstone, record it so we can return it as a potential
+                    // insertion location.
+                    tombstone = index;
+                }
+            }
+
+            probe_seq.move_next(self.bucket_mask);
         }
     }
 
