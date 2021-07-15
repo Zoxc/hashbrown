@@ -1139,37 +1139,6 @@ impl<A: Allocator + Clone> RawTableInner<A> {
         }
     }
 
-    /// Searches for an element in the table, stopping at the group where `stop` returns `Some` and
-    /// no elements matched. Returns the bucket that matches or the result of `stop`.
-    #[inline]
-    unsafe fn search(
-        &self,
-        hash: u64,
-        eq: &mut dyn FnMut(usize) -> bool,
-        mut stop: impl FnMut(&Group, &ProbeSeq) -> Option<usize>,
-    ) -> (usize, bool) {
-        let h2_hash = h2(hash);
-        let mut probe_seq = self.probe_seq(hash);
-
-        loop {
-            let group = Group::load(self.ctrl(probe_seq.pos));
-
-            for bit in group.match_byte(h2_hash).into_iter() {
-                let index = (probe_seq.pos + bit) & self.bucket_mask;
-
-                if likely(eq(index)) {
-                    return (index, true);
-                }
-            }
-
-            if let Some(stop) = stop(&group, &probe_seq) {
-                return (stop, false);
-            }
-
-            probe_seq.move_next(self.bucket_mask);
-        }
-    }
-
     /// Finds the position to insert something in a group.
     #[inline]
     unsafe fn find_insert_slot_in_group(
@@ -1215,29 +1184,42 @@ impl<A: Allocator + Clone> RawTableInner<A> {
     ) -> (usize, bool) {
         unsafe {
             let mut tombstone = None;
-            self.search(hash, eq, |group, probe_seq| {
-                let index = self.find_insert_slot_in_group(group, probe_seq);
+
+            let h2_hash = h2(hash);
+            let mut probe_seq = self.probe_seq(hash);
+
+            loop {
+                let group = Group::load(self.ctrl(probe_seq.pos));
+
+                for bit in group.match_byte(h2_hash).into_iter() {
+                    let index = (probe_seq.pos + bit) & self.bucket_mask;
+
+                    if likely(eq(index)) {
+                        return (index, true);
+                    }
+                }
+
+                let index = self.find_insert_slot_in_group(&group, &probe_seq);
 
                 if likely(index.is_some()) {
                     // Only stop the search if the group is empty. The element might be
                     // in a following group.
                     if likely(group.match_empty().any_bit_set()) {
                         // Use a tombstone if we found one
-                        if unlikely(tombstone.is_some()) {
-                            tombstone
+                        return if unlikely(tombstone.is_some()) {
+                            (tombstone.unwrap(), false)
                         } else {
-                            index
-                        }
+                            (index.unwrap(), false)
+                        };
                     } else {
                         // We found a tombstone, record it so we can return it as a potential
                         // insertion location.
                         tombstone = index;
-                        None
                     }
-                } else {
-                    None
                 }
-            })
+
+                probe_seq.move_next(self.bucket_mask);
+            }
         }
     }
 
