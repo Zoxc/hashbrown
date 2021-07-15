@@ -825,14 +825,11 @@ impl<T, A: Allocator + Clone> RawTable<T, A> {
         })
     }
 
-    /// Inserts an element in the table at a potential slot as returned by `find_potential`.
+    /// Marks an element in the table as inserted.
     #[inline]
-    pub unsafe fn insert_potential(&mut self, hash: u64, value: T, index: usize) -> Bucket<T> {
+    pub unsafe fn mark_inserted(&mut self, index: usize, hash: u64) {
         let old_ctrl = *self.table.ctrl(index);
         self.table.record_item_insert_at(index, old_ctrl, hash);
-        let bucket = self.table.bucket(index);
-        bucket.write(value);
-        bucket
     }
 
     /// Searches for an element in the table.
