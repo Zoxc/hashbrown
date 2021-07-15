@@ -1180,7 +1180,7 @@ impl<A: Allocator + Clone> RawTableInner<A> {
         hash: u64,
         eq: &mut dyn FnMut(usize) -> bool,
     ) -> (usize, bool) {
-        let mut tombstone = None;
+        let mut insert_slot = None;
 
         let h2_hash = h2(hash);
         let mut probe_seq = self.probe_seq(hash);
@@ -1196,22 +1196,22 @@ impl<A: Allocator + Clone> RawTableInner<A> {
                 }
             }
 
-            let index = self.find_insert_slot_in_group(&group, &probe_seq);
+            // We didn't find the element we were looking for in the group, try to get an
+            // insertion slot from the group if we don't have one yet.
+            if likely(insert_slot.is_none()) {
+                insert_slot = self.find_insert_slot_in_group(&group, &probe_seq);
+            }
 
-            if likely(index.is_some()) {
-                // Only stop the search if the group is empty. The element might be
-                // in a following group.
-                if likely(group.match_empty().any_bit_set()) {
-                    // Use a tombstone if we found one
-                    return if unlikely(tombstone.is_some()) {
-                        (tombstone.unwrap(), false)
-                    } else {
-                        (index.unwrap(), false)
-                    };
-                } else {
-                    // We found a tombstone, record it so we can return it as a potential
-                    // insertion location.
-                    tombstone = index;
+            // Only stop the search if the group contains at least one empty element.
+            // Otherwise, the element that we are looking for might be in a following group.
+            if likely(group.match_empty().any_bit_set()) {
+                // We must have found a insert slot by now, since the current group contains at
+                // least one. For tables smaller than the group width, there will still be an
+                // empty element in the current (and only) group due to the load factor.
+                debug_assert!(insert_slot.is_some());
+                match insert_slot {
+                    Some(insert_slot) => return (insert_slot, false),
+                    None => unsafe { hint::unreachable_unchecked() },
                 }
             }
 
