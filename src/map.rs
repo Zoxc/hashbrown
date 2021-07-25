@@ -1243,7 +1243,7 @@ where
     /// assert_eq!(map.insert(37, "c"), Some("b"));
     /// assert_eq!(map[&37], "c");
     /// ```
-    #[cfg_attr(feature = "inline-more", inline)]
+    #[inline(never)]
     pub fn insert(&mut self, k: K, v: V) -> Option<V> {
         let hash = make_insert_hash::<K, S>(&self.hash_builder, &k);
         if let Some((_, item)) = self.table.get_mut(hash, equivalent_key(&k)) {
